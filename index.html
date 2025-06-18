@@ -84,7 +84,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
         }
         
         .page-title {
@@ -125,6 +125,43 @@
         }
         .btn-danger:hover {
             background-color: #c0392b;
+        }
+
+        /* Filter Bar */
+        .filter-bar {
+            background-color: var(--card-background);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            align-items: center;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .filter-label {
+            font-size: 12px;
+            font-weight: 500;
+            color: #7f8c8d;
+        }
+
+        .filter-input {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .filter-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
         }
         
         /* Cards */
@@ -305,7 +342,6 @@
                 </div>
             </nav>
         </div>
-        
         <!-- Main Content -->
         <div class="main-content">
             <!-- Novedades Section -->
@@ -317,11 +353,35 @@
                         <span>Nueva Novedad</span>
                     </button>
                 </div>
+                <!-- Filter Bar for Novedades -->
+                <div class="filter-bar">
+                    <div class="filter-group">
+                        <label for="novedad-search" class="filter-label">Buscar por descripción</label>
+                        <input type="text" id="novedad-search" class="filter-input" placeholder="Buscar...">
+                    </div>
+                    <div class="filter-group">
+                        <label for="novedad-filter-prioridad" class="filter-label">Prioridad</label>
+                        <select id="novedad-filter-prioridad" class="filter-input">
+                            <option value="">Todas</option>
+                            <option value="Alta">Alta</option>
+                            <option value="Media">Media</option>
+                            <option value="Baja">Baja</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label for="novedad-filter-estado" class="filter-label">Estado</label>
+                        <select id="novedad-filter-estado" class="filter-input">
+                            <option value="">Todos</option>
+                            <option value="false">Pendiente</option>
+                            <option value="true">Completada</option>
+                        </select>
+                    </div>
+                </div>
                 <div class="cards-container" id="novedades-container">
                     <!-- Novedades will be loaded here by JavaScript -->
                 </div>
             </div>
-            
+
             <!-- Consignas Section -->
             <div id="consignas-section" style="display: none;">
                 <div class="header">
@@ -330,6 +390,21 @@
                         <span>+</span>
                         <span>Nueva Consigna</span>
                     </button>
+                </div>
+                <!-- Filter Bar for Consignas -->
+                 <div class="filter-bar">
+                    <div class="filter-group">
+                        <label for="consigna-search" class="filter-label">Buscar por título</label>
+                        <input type="text" id="consigna-search" class="filter-input" placeholder="Buscar...">
+                    </div>
+                    <div class="filter-group">
+                        <label for="consigna-filter-estado" class="filter-label">Estado</label>
+                        <select id="consigna-filter-estado" class="filter-input">
+                            <option value="">Todos</option>
+                             <option value="false">Pendiente</option>
+                            <option value="true">Completada</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="cards-container" id="consignas-container">
                     <!-- Consignas will be loaded here by JavaScript -->
@@ -477,19 +552,21 @@
     document.addEventListener('DOMContentLoaded', async () => {
         await initDB();
         
-        // Load initial data
-        loadAndRenderNovedades();
-        loadAndRenderConsignas();
+        // Load initial data with filters
+        filterAndRenderNovedades();
+        filterAndRenderConsignas();
 
         // Setup event listeners
         setupEventListeners();
+
+        // Notifications
+        checkAndRequestNotificationPermission();
+        setInterval(sendPendingTaskReminders, 60 * 60 * 1000); // Check for reminders every hour
     });
 
     function setupEventListeners() {
-        // Novedad form submission
+        // Form submissions
         document.getElementById('novedad-form').addEventListener('submit', handleNovedadSubmit);
-
-        // Consigna form submission
         document.getElementById('consigna-form').addEventListener('submit', handleConsignaSubmit);
 
         // Modal closing
@@ -498,19 +575,77 @@
                 closeModal(event.target.id);
             }
         });
+
+        // Filter event listeners
+        document.getElementById('novedad-search').addEventListener('input', filterAndRenderNovedades);
+        document.getElementById('novedad-filter-prioridad').addEventListener('change', filterAndRenderNovedades);
+        document.getElementById('novedad-filter-estado').addEventListener('change', filterAndRenderNovedades);
+        
+        document.getElementById('consigna-search').addEventListener('input', filterAndRenderConsignas);
+        document.getElementById('consigna-filter-estado').addEventListener('change', filterAndRenderConsignas);
     }
     
-    // --- NOVEDADES ---
+    // --- NOTIFICATIONS ---
+    function checkAndRequestNotificationPermission() {
+        if (!("Notification" in window)) {
+            console.log("This browser does not support desktop notification");
+        } else if (Notification.permission === "granted") {
+            console.log("Notification permission already granted.");
+        } else if (Notification.permission !== "denied") {
+            Notification.requestPermission().then(permission => {
+                if (permission === "granted") {
+                    console.log("Notification permission granted.");
+                    new Notification("¡Notificaciones activadas!", {
+                        body: "Recibirás recordatorios de tareas importantes.",
+                        icon: "✅"
+                    });
+                }
+            });
+        }
+    }
 
-    async function loadAndRenderNovedades() {
+    function sendNotification(title, options) {
+        if (Notification.permission === "granted") {
+            new Notification(title, options);
+        }
+    }
+
+    async function sendPendingTaskReminders() {
+        const novedades = await dbManager.getAll(NOVEDADES_STORE);
+        const pendingHighPriority = novedades.filter(n => n.prioridad === 'Alta' && !n.completed);
+
+        if (pendingHighPriority.length > 0) {
+            sendNotification("Recordatorio de Tareas Pendientes", {
+                body: `Tienes ${pendingHighPriority.length} novedad(es) de alta prioridad sin completar.`,
+                icon: "📝"
+            });
+        }
+    }
+
+
+    // --- NOVEDADES ---
+    async function filterAndRenderNovedades() {
         const novedades = await dbManager.getAll(NOVEDADES_STORE);
         const container = document.getElementById('novedades-container');
         container.innerHTML = '';
-        if (novedades.length === 0) {
-            container.innerHTML = '<p>No hay novedades registradas.</p>';
+
+        // Get filter values
+        const searchTerm = document.getElementById('novedad-search').value.toLowerCase();
+        const priorityFilter = document.getElementById('novedad-filter-prioridad').value;
+        const statusFilter = document.getElementById('novedad-filter-estado').value;
+
+        const filteredNovedades = novedades.filter(item => {
+            const matchesSearch = item.descripcion.toLowerCase().includes(searchTerm) || item.responsable.toLowerCase().includes(searchTerm);
+            const matchesPriority = !priorityFilter || item.prioridad === priorityFilter;
+            const matchesStatus = statusFilter === "" || String(item.completed) === statusFilter;
+            return matchesSearch && matchesPriority && matchesStatus;
+        });
+
+        if (filteredNovedades.length === 0) {
+            container.innerHTML = '<p>No se encontraron novedades que coincidan con los filtros.</p>';
             return;
         }
-        novedades.forEach(item => container.appendChild(createNovedadCard(item)));
+        filteredNovedades.forEach(item => container.appendChild(createNovedadCard(item)));
     }
 
     function createNovedadCard(novedad) {
@@ -539,9 +674,8 @@
             </div>
         `;
 
-        // Add event listeners for the buttons on the new card
         card.querySelector('.btn-edit').addEventListener('click', () => openNovedadModal(novedad));
-        card.querySelector('.btn-delete').addEventListener('click', () => confirmDelete(NOVEDADES_STORE, novedad.id, loadAndRenderNovedades));
+        card.querySelector('.btn-delete').addEventListener('click', () => confirmDelete(NOVEDADES_STORE, novedad.id, filterAndRenderNovedades));
         card.querySelector('.btn-complete').addEventListener('click', () => toggleNovedadComplete(novedad));
 
         return card;
@@ -553,7 +687,6 @@
         form.reset();
 
         if (novedad) {
-            // Editing existing novedad
             document.getElementById('novedad-modal-title').textContent = 'Editar Novedad';
             document.getElementById('novedad-id').value = novedad.id;
             document.getElementById('novedad-descripcion').value = novedad.descripcion;
@@ -562,7 +695,6 @@
             document.getElementById('novedad-prioridad').value = novedad.prioridad;
             document.getElementById('novedad-observaciones').value = novedad.observaciones;
         } else {
-            // Creating new novedad
             document.getElementById('novedad-modal-title').textContent = 'Nueva Novedad';
             document.getElementById('novedad-id').value = '';
         }
@@ -583,38 +715,53 @@
         };
 
         if (id) {
-            // Update
             novedadData.id = parseInt(id, 10);
             await dbManager.update(NOVEDADES_STORE, novedadData);
             showSuccessMessage('Novedad actualizada con éxito');
         } else {
-            // Create
             await dbManager.add(NOVEDADES_STORE, novedadData);
             showSuccessMessage('Novedad creada con éxito');
+            // Send notification for new high-priority tasks
+            if (novedadData.prioridad === 'Alta') {
+                sendNotification('Nueva Tarea de Alta Prioridad', {
+                    body: novedadData.descripcion,
+                    icon: '📝'
+                });
+            }
         }
         
         closeModal('novedad-modal');
-        loadAndRenderNovedades();
+        filterAndRenderNovedades();
     }
     
     async function toggleNovedadComplete(novedad) {
         novedad.completed = !novedad.completed;
         await dbManager.update(NOVEDADES_STORE, novedad);
-        loadAndRenderNovedades();
+        filterAndRenderNovedades();
     }
     
     // --- CONSIGNAS ---
-
-    async function loadAndRenderConsignas() {
+    async function filterAndRenderConsignas() {
         const consignas = await dbManager.getAll(CONSIGNAS_STORE);
         const container = document.getElementById('consignas-container');
         container.innerHTML = '';
-        if (consignas.length === 0) {
-            container.innerHTML = '<p>No hay consignas registradas.</p>';
+
+        const searchTerm = document.getElementById('consigna-search').value.toLowerCase();
+        const statusFilter = document.getElementById('consigna-filter-estado').value;
+
+        const filteredConsignas = consignas.filter(item => {
+            const matchesSearch = item.titulo.toLowerCase().includes(searchTerm) || item.asignado.toLowerCase().includes(searchTerm);
+            const matchesStatus = statusFilter === "" || String(item.completed) === statusFilter;
+            return matchesSearch && matchesStatus;
+        });
+
+        if (filteredConsignas.length === 0) {
+            container.innerHTML = '<p>No se encontraron consignas que coincidan con los filtros.</p>';
             return;
         }
-        consignas.forEach(item => container.appendChild(createConsignaCard(item)));
+        filteredConsignas.forEach(item => container.appendChild(createConsignaCard(item)));
     }
+
 
     function createConsignaCard(consigna) {
         const card = document.createElement('div');
@@ -640,7 +787,7 @@
         `;
         
         card.querySelector('.btn-edit').addEventListener('click', () => openConsignaModal(consigna));
-        card.querySelector('.btn-delete').addEventListener('click', () => confirmDelete(CONSIGNAS_STORE, consigna.id, loadAndRenderConsignas));
+        card.querySelector('.btn-delete').addEventListener('click', () => confirmDelete(CONSIGNAS_STORE, consigna.id, filterAndRenderConsignas));
         card.querySelector('.checkbox').addEventListener('change', (e) => toggleConsignaComplete(consigna, e.target.checked));
         
         return card;
@@ -684,13 +831,13 @@
         }
 
         closeModal('consigna-modal');
-        loadAndRenderConsignas();
+        filterAndRenderConsignas();
     }
 
     async function toggleConsignaComplete(consigna, isChecked) {
         consigna.completed = isChecked;
         await dbManager.update(CONSIGNAS_STORE, consigna);
-        loadAndRenderConsignas();
+        filterAndRenderConsignas();
     }
 
     // --- GENERAL & UTILS ---
@@ -725,14 +872,11 @@
     }
 
     function showSection(sectionId) {
-        // Ocultar todas las secciones
         document.getElementById('novedades-section').style.display = 'none';
         document.getElementById('consignas-section').style.display = 'none';
         
-        // Mostrar sección seleccionada
         document.getElementById(`${sectionId}-section`).style.display = 'block';
         
-        // Actualizar item de navegación activo
         document.querySelectorAll('.nav-item').forEach(item => {
             item.classList.remove('active');
         });
@@ -751,6 +895,7 @@
             msgElement.classList.remove('show');
         }, 3000);
     }
+
     </script>
 </body>
 </html>
