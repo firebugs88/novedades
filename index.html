@@ -12,6 +12,7 @@
             --text-color: #2c3e50;
             --card-background: #ffffff;
             --border-color: #e0e0e0;
+            --danger-color: #e74c3c;
         }
 
         * {
@@ -120,7 +121,7 @@
         }
 
         .btn-danger {
-            background-color: #e74c3c;
+            background-color: var(--danger-color);
             color: white;
         }
         .btn-danger:hover {
@@ -179,10 +180,16 @@
             display: flex;
             flex-direction: column;
             gap: 15px;
+            border-left: 5px solid transparent;
+        }
+
+        .card.card-overdue {
+            border-left-color: var(--danger-color);
         }
 
         .card[data-completed="true"] {
             opacity: 0.6;
+            border-left-color: #27ae60;
         }
         
         .card-header {
@@ -303,6 +310,16 @@
         
         .form-group {
             margin-bottom: 20px;
+        }
+
+        .form-group.inline {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .form-group.inline .form-input {
+            width: 80px;
         }
         
         .form-label {
@@ -489,6 +506,29 @@
         </div>
     </div>
     
+    <!-- Time Alert Modal -->
+    <div class="modal" id="time-alert-modal">
+        <div class="modal-content">
+            <h2 class="modal-header">⏰ Recordatorio de Novedad</h2>
+            <div id="time-alert-content" style="margin-bottom: 20px;">
+                <!-- Alert content will be injected here -->
+            </div>
+            <div class="form-group inline">
+                <label class="form-label">Pospener (minutos):</label>
+                <input type="number" id="postpone-minutes" class="form-input" value="10" min="1">
+            </div>
+            <div class="card-actions" style="justify-content: space-between;">
+                <div>
+                     <button type="button" class="btn btn-secondary" id="postpone-btn">Pospener</button>
+                </div>
+                <div>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('time-alert-modal')">Cerrar</button>
+                    <button type="button" class="btn btn-primary" id="complete-from-alert-btn">Marcar Completada</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Success Message -->
     <div class="success-message" id="success-message">
         <!-- Message will be set by JS -->
@@ -542,6 +582,7 @@
 
     const dbManager = {
         add: (storeName, item) => dbAction(storeName, 'readwrite', (store, resolve) => store.add(item).onsuccess = resolve),
+        get: (storeName, id) => dbAction(storeName, 'readonly', (store, resolve) => store.get(id).onsuccess = e => resolve(e.target.result)),
         getAll: (storeName) => dbAction(storeName, 'readonly', (store, resolve) => store.getAll().onsuccess = e => resolve(e.target.result)),
         update: (storeName, item) => dbAction(storeName, 'readwrite', (store, resolve) => store.put(item).onsuccess = resolve),
         delete: (storeName, id) => dbAction(storeName, 'readwrite', (store, resolve) => store.delete(id).onsuccess = resolve),
@@ -561,7 +602,8 @@
 
         // Notifications
         checkAndRequestNotificationPermission();
-        setInterval(sendPendingTaskReminders, 60 * 60 * 1000); // Check for reminders every hour
+        setInterval(sendPendingTaskReminders, 60 * 60 * 1000); // Check for desktop notifications every hour
+        setInterval(checkNovedadAlerts, 10000); // Check for on-screen alerts every 10 seconds
     });
 
     function setupEventListeners() {
@@ -585,7 +627,7 @@
         document.getElementById('consigna-filter-estado').addEventListener('change', filterAndRenderConsignas);
     }
     
-    // --- NOTIFICATIONS ---
+    // --- NOTIFICATIONS & ALERTS ---
     function checkAndRequestNotificationPermission() {
         if (!("Notification" in window)) {
             console.log("This browser does not support desktop notification");
@@ -622,6 +664,78 @@
         }
     }
 
+    function getNovedadDueDate(novedad) {
+        const [hours, minutes] = novedad.horaInicio.split(':');
+        const dueDate = new Date(novedad.date);
+        dueDate.setHours(hours, minutes, 0, 0);
+        return dueDate;
+    }
+
+
+    async function checkNovedadAlerts() {
+        const now = new Date();
+        const novedades = await dbManager.getAll(NOVEDADES_STORE);
+        
+        for (const novedad of novedades) {
+            if (novedad.completed || novedad.alertShown) continue;
+
+            const dueDate = getNovedadDueDate(novedad);
+
+            if (now >= dueDate) {
+                showTimeAlertModal(novedad);
+                novedad.alertShown = true; // Mark that alert has been shown
+                await dbManager.update(NOVEDADES_STORE, novedad);
+                break; // Show one alert at a time to not overwhelm the user
+            }
+        }
+        // Re-render to show overdue status on cards
+        filterAndRenderNovedades();
+    }
+
+    function showTimeAlertModal(novedad) {
+        const modal = document.getElementById('time-alert-modal');
+        const content = document.getElementById('time-alert-content');
+
+        content.innerHTML = `
+            <p><strong>Descripción:</strong> ${novedad.descripcion}</p>
+            <p><strong>Responsable:</strong> ${novedad.responsable}</p>
+            <p><strong>Hora de inicio:</strong> ${novedad.horaInicio}</p>
+            ${novedad.observaciones ? `<p><strong>Observaciones:</strong> ${novedad.observaciones}</p>` : ''}
+        `;
+
+        // --- Setup button listeners, ensuring they are not duplicated ---
+        const completeBtn = document.getElementById('complete-from-alert-btn');
+        const postponeBtn = document.getElementById('postpone-btn');
+        
+        const newCompleteBtn = completeBtn.cloneNode(true);
+        completeBtn.parentNode.replaceChild(newCompleteBtn, completeBtn);
+        newCompleteBtn.addEventListener('click', async () => {
+            await toggleNovedadComplete(novedad);
+            closeModal('time-alert-modal');
+        });
+
+        const newPostponeBtn = postponeBtn.cloneNode(true);
+        postponeBtn.parentNode.replaceChild(newPostponeBtn, postponeBtn);
+        newPostponeBtn.addEventListener('click', async () => {
+            const minutes = parseInt(document.getElementById('postpone-minutes').value, 10);
+            if (isNaN(minutes) || minutes <= 0) return;
+            
+            const currentDueDate = getNovedadDueDate(novedad);
+            currentDueDate.setMinutes(currentDueDate.getMinutes() + minutes);
+            
+            novedad.horaInicio = `${String(currentDueDate.getHours()).padStart(2, '0')}:${String(currentDueDate.getMinutes()).padStart(2, '0')}`;
+            novedad.date = currentDueDate.toISOString();
+            novedad.alertShown = false; // Allow new alert for postponed time
+
+            await dbManager.update(NOVEDADES_STORE, novedad);
+            showSuccessMessage(`Novedad pospuesta por ${minutes} minutos.`);
+            closeModal('time-alert-modal');
+            filterAndRenderNovedades();
+        });
+
+        modal.classList.add('active');
+    }
+
 
     // --- NOVEDADES ---
     async function filterAndRenderNovedades() {
@@ -652,7 +766,16 @@
         const card = document.createElement('div');
         card.className = 'card';
         card.dataset.id = novedad.id;
-        card.dataset.completed = novedad.completed || false;
+        
+        const isCompleted = novedad.completed || false;
+        card.dataset.completed = isCompleted;
+
+        const dueDate = getNovedadDueDate(novedad);
+        const isOverdue = new Date() > dueDate && !isCompleted;
+        if(isOverdue) {
+            card.classList.add('card-overdue');
+        }
+
         const today = new Date().toLocaleDateString();
         const itemDate = new Date(novedad.date).toLocaleDateString();
 
@@ -712,10 +835,15 @@
             observaciones: document.getElementById('novedad-observaciones').value,
             date: new Date().toISOString(),
             completed: false,
+            alertShown: false,
         };
 
         if (id) {
+            const existing = await dbManager.get(NOVEDADES_STORE, parseInt(id, 10));
             novedadData.id = parseInt(id, 10);
+            novedadData.completed = existing.completed; // Preserve completed status
+            // If time is changed, allow new alert
+            novedadData.alertShown = existing.horaInicio !== novedadData.horaInicio ? false : existing.alertShown;
             await dbManager.update(NOVEDADES_STORE, novedadData);
             showSuccessMessage('Novedad actualizada con éxito');
         } else {
@@ -823,6 +951,8 @@
 
         if (id) {
             consignaData.id = parseInt(id, 10);
+            const existing = await dbManager.get(CONSIGNAS_STORE, consignaData.id);
+            consignaData.completed = existing.completed;
             await dbManager.update(CONSIGNAS_STORE, consignaData);
             showSuccessMessage('Consigna actualizada con éxito');
         } else {
